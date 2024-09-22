@@ -51,6 +51,7 @@ class ArgoverseV1Dataset(Dataset):
         self._raw_file_names = os.listdir(self.raw_dir)
         self._processed_file_names = [os.path.splitext(f)[0] + '.pt' for f in self.raw_file_names]
         self._processed_paths = [os.path.join(self.processed_dir, f) for f in self._processed_file_names]
+        ## 调用基类函数，如果存在没有处理过的数据，将调用子类process函数处理csv文件，变成pt文件（pytorch格式）
         super(ArgoverseV1Dataset, self).__init__(root, transform=transform)
 
     @property

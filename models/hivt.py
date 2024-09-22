@@ -28,7 +28,30 @@ from utils import TemporalData
 
 
 class HiVT(pl.LightningModule):
-
+    '''
+    >>>在使用 pl.LightningModule 时，调用顺序主要遵循以下流程：
+    1 __init__:
+    初始化模型的层、损失函数等。
+    2 forward:
+    当模型被调用时，首先执行前向传播。
+    3 training_step:
+    在每个训练批次中被调用，计算损失并记录训练指标。
+    4 validation_step:
+    在每个验证批次中被调用，计算验证损失并记录验证指标。
+    5 configure_optimizers:
+    在训练开始时被调用，配置优化器和学习率调度器。
+    训练和验证循环:
+    训练循环会反复调用 training_step，而验证循环则会反复调用 validation_step。
+    >>>总体流程
+    在训练时，每个 epoch 循环会先进行所有的训练步骤，然后进行验证步骤。
+    当 Trainer.fit() 被调用时，以上步骤会自动管理。
+    >>>示例调用顺序
+    1 __init__() → 初始化
+    2 configure_optimizers() → 配置优化器
+    3 training_step() → 处理每个训练批次
+    4 validation_step() → 处理每个验证批次
+    5 forward() → 在 training_step 和 validation_step 中调用，用于前向传播
+    '''
     def __init__(self,
                  historical_steps: int,
                  future_steps: int,
@@ -47,6 +70,9 @@ class HiVT(pl.LightningModule):
                  weight_decay: float,
                  T_max: int,
                  **kwargs) -> None:
+        '''
+        1 super函数, 主要作用调用父类的 __init__ 方法
+        '''
         super(HiVT, self).__init__()
         self.save_hyperparameters()
         self.historical_steps = historical_steps
@@ -80,11 +106,34 @@ class HiVT(pl.LightningModule):
                                   future_steps=future_steps,
                                   num_modes=num_modes,
                                   uncertain=True)
+        """
+            预测分布参数（例如高斯分布）的模型
+        """
         self.reg_loss = LaplaceNLLLoss(reduction='mean')
+        """
+            整行代码计算的是交叉熵损失，常用于多分类任务
+        """
         self.cls_loss = SoftTargetCrossEntropyLoss(reduction='mean')
-
+        """
+            AED(Average Euclidean Distance)
+            定义：平均欧几里得距离，表示预测轨迹与真实轨迹之间的平均距离。
+            计算：对于每个时间步，计算预测位置和真实位置之间的欧几里得距离，然后取所有时间步的平均值。
+            应用：通常用于评估预测轨迹的精确度，数值越小表示预测越准确。
+        """
         self.minADE = ADE()
+        """
+            FDE(Final Displacement Error)
+            定义：最终位移误差，专注于预测轨迹的最后一个时间步与真实轨迹最后一个时间步之间的距离。
+            计算：仅计算预测轨迹的最后一个点与真实轨迹最后一个点之间的欧几里得距离。
+            应用：用于评估模型在预测轨迹结束时的准确性，特别关注最后的预测结果。
+        """
         self.minFDE = FDE()
+        """
+            MR(Miss Rate)
+            定义：漏检率，表示预测轨迹未能在一定阈值内接近真实轨迹的比例。
+            计算：通常定义为预测与真实轨迹之间的距离超过某个阈值的样本占总样本的比例。例如，若距离超过 0.5 米则认为是漏检。
+            应用：用于评估模型的鲁棒性和准确性，数值越小表示模型的预测越可靠。
+        """
         self.minMR = MR()
 
     def forward(self, data: TemporalData):

@@ -47,8 +47,12 @@ class LocalEncoder(nn.Module):
         super(LocalEncoder, self).__init__()
         self.historical_steps = historical_steps
         self.parallel = parallel
-
+        # 提取半径范围内的 图神经网络的边元素和节点元素
+        # 边元素：交互车辆的相对位置
+        # 节点元素：交互车辆
         self.drop_edge = DistanceDropEdge(local_radius)
+        
+        # 车辆位置编码
         self.aa_encoder = AAEncoder(historical_steps=historical_steps,
                                     node_dim=node_dim,
                                     edge_dim=edge_dim,
@@ -98,7 +102,13 @@ class LocalEncoder(nn.Module):
 
 
 class AAEncoder(MessagePassing):
-
+    '''
+        MessagePassing 是 PyTorch Geometric (PyG) 中的一个基类，用于实现图神经网络 (GNN) 的消息传递机制。
+        三个主要步骤:
+        消息生成: 计算从每个邻居节点传递到目标节点的消息。
+        消息聚合: 聚合来自所有邻居的消息。
+        节点更新: 使用聚合后的消息更新目标节点的状态。
+    '''
     def __init__(self,
                  historical_steps: int,
                  node_dim: int,
@@ -108,14 +118,29 @@ class AAEncoder(MessagePassing):
                  dropout: float = 0.1,
                  parallel: bool = False,
                  **kwargs) -> None:
+        '''
+        # 输入维度: 10, 输出维度: 3
+        model = SimpleNN(input_size=10, output_size=3)
+        # 创建一个批次大小为 5 的输入
+        input_data = torch.randn(5, 10)  # (批大小, 特征数量)
+        output_data = model(input_data)
+        
+        print("Input shape:", input_data.shape)  # (5, 10)
+        print("Output shape:", output_data.shape)  # (5, 3)
+        '''
+        
+        # 该神经网络输入和输出维度为node_dim和embed_dim
         super(AAEncoder, self).__init__(aggr='add', node_dim=0, **kwargs)
         self.historical_steps = historical_steps
         self.embed_dim = embed_dim
         self.num_heads = num_heads
         self.parallel = parallel
 
+        # 用于自车位置编码（dx，dy）基于上个时间 p(t) - p(t-1)
         self.center_embed = SingleInputEmbedding(in_channel=node_dim, out_channel=embed_dim)
+        # 用于他车位置编码，他车在（上下帧）的编码node_dim 及 他车与交互车辆（同一帧）相对位置编码 edge_dim
         self.nbr_embed = MultipleInputEmbedding(in_channels=[node_dim, edge_dim], out_channel=embed_dim)
+        # 用于计算attention
         self.lin_q = nn.Linear(embed_dim, embed_dim)
         self.lin_k = nn.Linear(embed_dim, embed_dim)
         self.lin_v = nn.Linear(embed_dim, embed_dim)
@@ -133,6 +158,13 @@ class AAEncoder(MessagePassing):
             nn.Dropout(dropout),
             nn.Linear(embed_dim * 4, embed_dim),
             nn.Dropout(dropout))
+        # 如果当前时间位置无效，输入的数据不能用，需要用可学习的参数替代
+        '''
+            nn.Parameter 是 torch.Tensor 的子类。
+            当将 nn.Parameter 添加到 (nn.Module)!!! 的属性中时，它会被自动添加到模型的参数列表中，
+            这样在调用 model.parameters() 时会包含它。
+            通常用于定义模型的权重、偏置或其他需要在训练中学习的参数。
+        '''
         self.bos_token = nn.Parameter(torch.Tensor(historical_steps, embed_dim))
         nn.init.normal_(self.bos_token, mean=0., std=.02)
         self.apply(init_weights)
@@ -159,8 +191,36 @@ class AAEncoder(MessagePassing):
             if rotate_mat is None:
                 center_embed = self.center_embed(x)
             else:
+        # x[node_idx, node_steps] = （dx ,dy）
+        # node_idx 是车辆（自车或他车的id）
+        # node_steps 时间步长 0:20
+                # self.center_embed 输入是：在t时间下，所有车辆（id）对应的上下帧的位置
+                # self.center_embed 输出是：在t时间下，所有车辆（id）对应的上下帧的位置编码
+                
+                # x 维度 与  rotate_mat 维度不一致，需要进行 unsqueeze 和 squeeze 操作
+                # torch.bmm 是矩阵乘法操作
+                # 进入自车神经网络编码之后，输出 center_embed
                 center_embed = self.center_embed(torch.bmm(x.unsqueeze(-2), rotate_mat).squeeze(-2))
+            '''
+                在 bos_mask 为 True 的位置, center_embed 将被替换为 self.bos_token[t] 的值，
+                而在 bos_mask 为 False 的位置,center_embed 保持不变。这样可以在嵌入中插入特定的序列开始标记。
+                1 self.bos_token = nn.Parameter(torch.Tensor(historical_steps, embed_dim))
+                2 self.bos_token在无效时刻, self.bos_token替代
+                
+                nn.Parameter 是 PyTorch 中的一种特殊张量，用于定义模型中的可学习参数。它本身不“学习”，但它的值会在训练过程中通过反向传播自动更新。具体来说：
+                关键点
+                可学习参数: 当你将一个张量定义为 nn.Parameter 时,PyTorch 会将其视为模型的参数，这意味着在训练过程中，该参数的值会随着损失函数的优化而改变。
+                反向传播: 在训练过程中，当你调用 loss.backward() 时，所有包含在模型参数中的 nn.Parameter 都会根据梯度更新其值。
+                使用场景: 通常在自定义模型或神经网络层时使用 nn.Parameter 来定义特定的权重或偏置。
+            '''
             center_embed = torch.where(bos_mask.unsqueeze(-1), self.bos_token[t], center_embed)
+        """
+            1 经过图神经网络更新 x * edge_index = x_j center_embed * edge_index = center_embed_i 
+            2 t 时刻， 构成每个车辆 自车相邻帧相对位置编码 与 他车相对位置编码
+            3 center_embed = center_embed + ? (ResNet减少梯度消失问题)
+            4 self._mha_block 是 t时刻 , 自车编码 与 他车位置编码的 attention
+                 edge_index 中所有的自车编码 与 他车位置编码的 的 邻边编码  ---> 相对关系所有attention
+        """
         center_embed = center_embed + self._mha_block(self.norm1(center_embed), x, edge_index, edge_attr, rotate_mat,
                                                       size)
         center_embed = center_embed + self._ff_block(self.norm2(center_embed))
@@ -182,8 +242,13 @@ class AAEncoder(MessagePassing):
                 center_rotate_mat = rotate_mat.repeat(self.historical_steps, 1, 1)[edge_index[1]]
             else:
                 center_rotate_mat = rotate_mat[edge_index[1]]
+            # x_j 是 t 时刻下，所有车辆的上下帧相对位置关系(dx , dy)
+            # edge_attr 是 t 时刻下， 每一个车辆，与所有其他车辆，在同一帧中的相对位置关系edge_attr
             nbr_embed = self.nbr_embed([torch.bmm(x_j.unsqueeze(-2), center_rotate_mat).squeeze(-2),
                                         torch.bmm(edge_attr.unsqueeze(-2), center_rotate_mat).squeeze(-2)])
+        # 多头注意力机制
+        # center_embed_i 是 对应edge_index的 同一车辆，相邻时刻的位置编码
+        # [len(edge_attr) , 64 ] --> [len(edge_attr) , 8 , 8] 
         query = self.lin_q(center_embed_i).view(-1, self.num_heads, self.embed_dim // self.num_heads)
         key = self.lin_k(nbr_embed).view(-1, self.num_heads, self.embed_dim // self.num_heads)
         value = self.lin_v(nbr_embed).view(-1, self.num_heads, self.embed_dim // self.num_heads)
@@ -207,6 +272,14 @@ class AAEncoder(MessagePassing):
                    edge_attr: torch.Tensor,
                    rotate_mat: Optional[torch.Tensor],
                    size: Size) -> torch.Tensor:
+        # edge_index 所有车辆，在t时刻，半径范围内的邻居矩阵信息（图神经网络）
+        # x 所有车辆t时刻，上下帧的相对关系
+        '''
+            准确来说, edge_index 与 x 在message函数中更新 , 隐式生成x_j = edge_index * x;
+            因为edge_index 与 edge_attr 一一对应(一个index , 一个同一帧障碍物物间的相对关系)
+            x_j 为 对应 edge_index 的 x(同一车辆在t时刻 ,t -1时刻的相对位置), edge_attr 为 同一时刻，不同车辆之间的相对位置
+        '''
+        # message 函数中x_j 为 对应edge_index的邻接矩阵，起点index对应的车辆位置（x 所有车辆t时刻，上下帧的相对关系）
         center_embed = self.out_proj(self.propagate(edge_index=edge_index, x=x, center_embed=center_embed,
                                                     edge_attr=edge_attr, rotate_mat=rotate_mat, size=size))
         return self.proj_drop(center_embed)

@@ -59,10 +59,12 @@ class TemporalData(Data):
 
 
 class DistanceDropEdge(object):
-
+    # 初始化
+    # object 是 Python 中所有对象的基础
     def __init__(self, max_distance: Optional[float] = None) -> None:
         self.max_distance = max_distance
 
+    # __call__
     def __call__(self,
                  edge_index: torch.Tensor,
                  edge_attr: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -70,6 +72,9 @@ class DistanceDropEdge(object):
             return edge_index, edge_attr
         row, col = edge_index
         mask = torch.norm(edge_attr, p=2, dim=-1) < self.max_distance
+        # 处理成所有图神经网络边元素（车辆位置起始点和终点），是否在max_distance内。
+        # 在max_distance内的话，边元素index被保存在edge_index中
+        # 在max_distance内的话，边元素edge_attr被保存在edge_attr中
         edge_index = torch.stack([row[mask], col[mask]], dim=0)
         edge_attr = edge_attr[mask]
         return edge_index, edge_attr

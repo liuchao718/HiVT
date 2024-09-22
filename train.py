@@ -24,6 +24,7 @@ from models.hivt import HiVT
 if __name__ == '__main__':
     pl.seed_everything(2022)
     
+    ## argparse 参数标准库
     parser = ArgumentParser()
     parser.add_argument('--root', type=str, required=True)
     parser.add_argument('--train_batch_size', type=int, default=32)
