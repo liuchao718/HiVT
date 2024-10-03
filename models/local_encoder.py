@@ -213,6 +213,9 @@ class AAEncoder(MessagePassing):
                 反向传播: 在训练过程中，当你调用 loss.backward() 时，所有包含在模型参数中的 nn.Parameter 都会根据梯度更新其值。
                 使用场景: 通常在自定义模型或神经网络层时使用 nn.Parameter 来定义特定的权重或偏置。
             '''
+            '''
+                都是一个参数代码所有障碍物？？？
+            '''
             center_embed = torch.where(bos_mask.unsqueeze(-1), self.bos_token[t], center_embed)
         """
             1 经过图神经网络更新 x * edge_index = x_j center_embed * edge_index = center_embed_i 
@@ -313,6 +316,9 @@ class TemporalEncoder(nn.Module):
     def forward(self,
                 x: torch.Tensor,
                 padding_mask: torch.Tensor) -> torch.Tensor:
+        '''
+            都是一个参数代码所有障碍物？？？
+        '''
         x = torch.where(padding_mask.t().unsqueeze(-1), self.padding_token, x)
         expand_cls_token = self.cls_token.expand(-1, x.shape[1], -1)
         x = torch.cat((x, expand_cls_token), dim=0)
@@ -322,6 +328,23 @@ class TemporalEncoder(nn.Module):
 
     @staticmethod
     def generate_square_subsequent_mask(seq_len: int) -> torch.Tensor:
+        '''
+        上三角注意力掩码(也称为因果掩码或look-ahead掩码)在Transformer模型中起到了至关重要的作用,
+        特别是在解码器(Decoder)的部分。这种掩码确保了模型在预测当前位置的输出时,只能考虑到当前位置之前(包括当前位置)的信息,
+        而不能利用未来位置的信息,从而保持了序列生成的因果关系。
+        在自注意力(Self-Attention)机制中,上三角掩码通过阻止模型在计算注意力权重时考虑未来的时间步,来实现这种因果关系。
+        具体来说,掩码是一个正方形矩阵,其大小与注意力分数矩阵相同。\
+        在上三角掩码中,对角线及以上的元素设置为一个非常大的负数(例如负无穷大),这样在经过softmax函数之后,这些位置的权重几乎为零,
+        因此不会对当前位置的输出产生影响。对角线以下的元素设置为零,表示这些位置的信息是可见的,可以正常参与到注意力权重的计算中。
+        上三角掩码对模型的影响主要体现在以下几个方面：
+        保持序列生成的因果性：在序列到序列(Seq2Seq)模型中,如机器翻译或文本摘要,生成当前词应该只依赖于之前的词,上三角掩码确保了这一点。
+        提高训练效率：通过限制注意力的范围,可以减少计算量,从而提高训练的效率。
+        防止信息泄露：在预测任务中,如果模型能够看到未来的信息,可能会导致作弊行为,上三角掩码避免了这种情况。
+        改善模型性能：通过确保模型在每个时间步只能使用当前和过去的信息,上三角掩码有助于模型学习到更加精确和有用的表示。
+        在实际应用中,上三角掩码通常与其他类型的掩码(如填充掩码)结合使用,以处理变长序列和填充问题。例如,在Transformer模型的解码器中,通常会将上三角掩码与填充掩码相结合,以确保模型在处理填充序列时不会将填充部分的无关信息考虑在内
+        。
+        总的来说,上三角注意力掩码是Transformer模型中实现有效自注意力机制的关键技术之一,它通过控制信息流的方向和范围,帮助模型更好地学习和生成序列。
+        '''
         mask = (torch.triu(torch.ones(seq_len, seq_len)) == 1).transpose(0, 1)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
